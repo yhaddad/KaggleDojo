@@ -105,12 +105,14 @@ class zbinner(binner_base):
                                             method='Nelder-Mead')
         else:
             min_args = {"method": "BFGS"}
+            bound_max   = np.array([ max(self.range) for i in range(self.nbins + 1)])
+            bound_min   = np.array([ min(self.range) for i in range(self.nbins + 1)])
             _bounds_ = costum_bounds(bound_max, bound_min)
             self.result = optimize.basinhopping(self.cost_fun, x_init, 
                                                 minimizer_kwargs=min_args,
                                                 accept_test=_bounds_,
                                                 #callback=print_fun,
-                                                niter=100)
+                                                niter=10000)
             
         return self.result
     def optimisation_monitoring_(self,fig=None):
@@ -132,7 +134,7 @@ class zbinner(binner_base):
         plt.setp(xticklabels, visible=False)
         return fig
 
-    def parameter_scan_2d(self, fig=None):
+    def parameter_scan_2d(self, fig=None, label='parameter_scan'):
         if self.nbins <= 3 : return None
         tx = np.arange(self.range[0], self.range[1], 0.01)
         ty = np.arange(self.range[0], self.range[1], 0.01)
@@ -157,10 +159,10 @@ class zbinner(binner_base):
                 plt.plot(self.result.x[i], self.result.x[j], 'ro', label = 'best fit')
                 plt.xlabel('$x_{%i}$'%i)
                 plt.ylabel('$x_{%i}$'%j)
-                plt.legend(loc='best')
-                
-                plt.savefig('parameter_scan_%i_%i.png' % (i,j) )
-                plt.savefig('parameter_scan_%i_%i.pdf' % (i,j) )
+                plt.legend(loc='lower left')
+                plt.tight_layout()
+                plt.savefig('%s_%i_%i.png' % (label, i,j) )
+                plt.savefig('%s_%i_%i.pdf' % (label, i,j) )
         return fig
 
     def covariance_matrix(self):
