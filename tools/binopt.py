@@ -5,6 +5,9 @@ np.set_printoptions(precision=4)
 from scipy import optimize
 from scipy.integrate import quad
 import matplotlib.pyplot as plt
+from matplotlib.ticker import MaxNLocator, NullLocator
+from matplotlib.colors import LinearSegmentedColormap, colorConverter
+from matplotlib.ticker import ScalarFormatter
 
 import kde
 
@@ -81,10 +84,12 @@ class zbinner(binner_base):
     def cost_fun(self,x, lower_bound=None, upper_bound=None ):
         z  = None
         x = np.sort(x)
+        # print "cost function : ", x
         if upper_bound is not None:
-            x[-1] = upper_bound
+            x[x>=upper_bound] = upper_bound
         if lower_bound is not None:
-            x[ 0] = lower_bound
+            x[x<=lower_bound] = lower_bound
+        # print "     function : ", x, lower_bound, upper_bound
         if self.use_kde_density:
             z  = self.binned_score_density(x)
         else:
@@ -124,17 +129,21 @@ class zbinner(binner_base):
             self.result.x = np.sort(self.result.x)
         else:
             # min_args = {"method": "BFGS"}
-            min_args = {"method": "BFGS", "args": (self.range[1],)}
+            # min_args = {"method": "Nelder-Mead", "args": (self.range[0],self.range[1])}
+            min_args = {"method": "Powell"     , "args": (self.range[0],self.range[1])}
+            # min_args = {"method": "SLSQP"      , "args": (self.range[0],self.range[1])}
+            # min_args = {"method": "BFGS"       , "args": (self.range[0],self.range[1])}
             bound_max   = np.array([ max(self.range) for i in range(self.nbins + 1)])
             bound_min   = np.array([ min(self.range) for i in range(self.nbins + 1)])
             _bounds_ = costum_bounds(bound_max, bound_min)
+
             self.result = optimize.basinhopping(self.cost_fun, x_init,
-                                                args  = (min(self.range),max(self.range)),
+                                                #args  = (min(self.range),max(self.range)),
                                                 minimizer_kwargs=min_args,
                                                 accept_test=_bounds_,
                                                 # take_step=costum_steps,
                                                 #callback=print_fun,
-                                                niter=500)
+                                                niter=3000)
             self.result.x = np.sort(self.result.x)
         return self.result
     def optimisation_monitoring_(self,fig=None):
@@ -154,69 +163,109 @@ class zbinner(binner_base):
         ax2.set_xlabel('optimisation steps')
         xticklabels = ax1.get_xticklabels()
         plt.setp(xticklabels, visible=False)
-        #return fig
+        return fig
 
-    def parameter_scan_2d(self, label='parameter_scan'):
+    def parameter_scan_2d(self, fig=None,  title_fmt=".2f", max_n_ticks=5, label='parameter_scan'):
         if self.nbins <= 2 : return None
         tx = np.arange(self.range[0], self.range[1], 0.01)
         ty = np.arange(self.range[0], self.range[1], 0.01)
-
         xx,yy = np.meshgrid(tx,ty)
-        fig = plt.figure(figsize=(self.nbins*2,self.nbins*2))
-        plt.subplots_adjust(hspace=0.1)
-        plt.subplots_adjust(wspace=0.1)
-        xticklabels = []
-        yticklabels = []
+
+        K       = self.nbins - 1
+        factor  = 2.0
+        lbdim   = 0.5 * factor  # size of left/bottom margin
+        trdim   = 0.2 * factor  # size of top/right margin
+        whspace = 0.05          # w/hspace size
+        plotdim = factor * K       + factor * (K - 1.) * whspace
+        dim     = lbdim  + plotdim + trdim
+
+        if fig is None:
+            fig, axes = plt.subplots(K, K, figsize=(dim, dim))
+        else:
+            try:
+                axes = np.array(fig.axes).reshape((K, K))
+            except:
+                raise ValueError(   "Provided figure has {0} axes, but data has "
+                                    "dimensions K={1}".format(len(fig.axes), K))
+        lb = lbdim / dim
+        tr = (lbdim + plotdim) / dim
+        fig.subplots_adjust(left=lb, bottom=lb, right=tr, top=tr, wspace=whspace, hspace=whspace)
 
         for i in range(1,self.nbins):
-            for j in range(1,self.nbins):
-                if i < j : continue
-                ax_ = plt.subplot2grid((self.nbins-1,self.nbins-1),(i-1,j-1))
-                print 'parameter scan : ', i, j
-                if i != j :
-                    # def _fun_(x,y):
-                    #     _param_ = [self.result.x[k] for k in range(self.nbins+1)]
-                    #     _param_[i] = x
-                    #     _param_[j] = y
-                    #     _param_[ 0] = self.range[0]
-                    #     _param_[-1] = self.range[1]
-                    #     return self.cost_fun(np.array(_param_))
-                    # vec_fun_ = np.vectorize(_fun_)
-                    # zz     = vec_fun_(xx,yy)
-                    # levels = np.linspace(zz.min(),0.95*zz.min(),5)
-                    # plt.contourf   (xx, yy, zz, np.linspace(zz.min(),0.85*zz.min(),20),
-                    #                 cmap=plt.cm.Spectral_r)
-                    # C = ax_.contour(xx, yy, zz, levels, linewidth=0.1,colors='black')
-                    # ax_.clabel(C, inline=1, fontsize=5)
+            ax = axes[i-1,i-1]
+            def _fun_1d(x):
+                _param_ = [self.result.x[k] for k in range(self.nbins+1)]
+                _param_[i] = x
+                _param_[ 0] = self.range[0]
+                _param_[-1] = self.range[1]
+                return self.cost_fun(np.array(_param_))
+            vec_fun_1d = np.vectorize(_fun_1d)
+            z1d = vec_fun_1d(tx)
+            ax.plot(tx, z1d)
+            ax.axvline(x=self.result.x[i], color='red', ls ="--")
+            ax.set_xlim(self.range)
+            if i > 1 : ax.set_yticklabels([])
+            if max_n_ticks == 0:
+                ax.xaxis.set_major_locator(NullLocator())
+            else:
+                ax.xaxis.set_major_locator(MaxNLocator(max_n_ticks, prune="lower"))
+            if i < self.nbins - 1:
+                ax.set_xticklabels([])
+            else:
+                [l.set_rotation(90) for l in ax.get_xticklabels()]
+                ax.xaxis.set_major_formatter( ScalarFormatter(useMathText=True))
+                ax.xaxis.set_label_text("$x_%i$" % i )
+                print "\t $x_%i$" % i
+            if i == 1 :
+                [l.set_rotation(0) for l in ax.get_yticklabels()]
+                ax.yaxis.set_major_formatter( ScalarFormatter(useMathText=True))
+                ax.yaxis.set_label_text("cost function")
 
-                    ax_.plot(self.result.x[j], self.result.x[i], 'ro', label = 'best fit')
-                    ax_.set_xlim(self.range)
-                    ax_.set_ylim(self.range)
-                    if j == self.nbins-1:
-                        ax_.set_xlabel('$x_{%i}$'%j)
-                        ax_.set_xticks([])
-                        # plt.setp(ax_.get_xticklabels(), visible=False)
-                    # else : ax_.set_xticks([])
-                    if i == 1:
-                        ax_.set_ylabel('$x_{%i}$'%j)
-                        # ax.set_xticks([])
-                        # plt.setp(ax_.get_yticklabels(), visible=False)
-                    # else : ax_.set_yticks([])
+            for j in range(1,self.nbins):
+                ax = axes[i-1, j-1]
+                print '(i,j) = ',  (i,j)
+                if j > i:
+                    ax.set_frame_on(False)
+                    ax.set_xticks([])
+                    ax.set_yticks([])
+                    continue
+                elif j == i:
+                    continue
+                def _fun_(x,y):
+                    _param_ = [self.result.x[k] for k in range(self.nbins+1)]
+                    _param_[i] = x
+                    _param_[j] = y
+                    _param_[ 0] = self.range[0]
+                    _param_[-1] = self.range[1]
+                    return self.cost_fun(np.array(_param_))
+                vec_fun_ = np.vectorize(_fun_)
+                zz       = vec_fun_(xx,yy)
+                levels   = np.linspace(zz.min(),0.95*zz.min(),5)
+                ax.contourf(xx, yy, zz, np.linspace(zz.min(),0.85*zz.min(),20),
+                            cmap=plt.cm.Spectral_r)
+                C = ax.contour(xx, yy, zz, levels, linewidth=0.1,colors='black')
+                ax.clabel(C, inline=1, fontsize=5)
+                ax.plot(self.result.x[j], self.result.x[i], 'ro', label = 'best fit')
+                ax.set_xlim(self.range)
+                ax.set_ylim(self.range)
+                if max_n_ticks == 0:
+                    ax.xaxis.set_major_locator(NullLocator())
+                    ax.yaxis.set_major_locator(NullLocator())
                 else:
-                    # def _fun_1d(x):
-                    #     _param_ = [self.result.x[k] for k in range(self.nbins+1)]
-                    #     _param_[i] = x
-                    #     _param_[ 0] = self.range[0]
-                    #     _param_[-1] = self.range[1]
-                    #     return self.cost_fun(np.array(_param_))
-                    # vec_fun_1d = np.vectorize(_fun_1d)
-                    # z1d = vec_fun_1d(tx)
-                    # ax_.plot(tx, z1d, 'r-', lw=1.5)
-                    # ax_.set_ylim([z1d.min(),0.90*z1d.min()])
-                    ax_.set_xlim(self.range)
-                    ax_.axvline(x=self.result.x[i])
-                    ax_.set_xlabel('$x_{%i}$'%i)
-                    if i != 1 : ax_.yaxis.tick_right()
-        #return fig
+                    ax.xaxis.set_major_locator(MaxNLocator(max_n_ticks,prune="lower"))
+                    ax.yaxis.set_major_locator(MaxNLocator(max_n_ticks,prune="lower"))
+                if i < self.nbins - 1:
+                    ax.set_xticklabels([])
+                else:
+                    [l.set_rotation(90) for l in ax.get_xticklabels()]
+                    ax.xaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+                    ax.xaxis.set_label_text("$x_%i$" % j )
+                if j > 1:
+                    ax.set_yticklabels([])
+                else:
+                    [l.set_rotation(0) for l in ax.get_yticklabels()]
+                    ax.yaxis.set_major_formatter(ScalarFormatter(useMathText=True))
+                    ax.yaxis.set_label_text("$x_%i$" % i )
+        return fig
     def covariance_matrix(self):
         pass

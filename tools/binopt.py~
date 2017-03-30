@@ -1,0 +1,114 @@
+import numpy as np
+import pandas as pd
+np.set_printoptions(precision=4)
+
+from scipy import optimize
+from scipy.integrate import quad
+
+class binner_base(object):
+    """ Abstract class for classification based binning
+    """
+    def __init__(self, nbins, range):
+        self.nbins = nbins
+        self.range = range
+        raise NotImplementedError('Method or function has not been implemented yet')
+    def fit(self, X, y, sample_weights=None):
+        raise NotImplementedError('Method or function has not been implemented yet')
+        return self
+    
+class costum_bounds(object):
+    def __init__(self, xmax=[1.1,1.1], xmin=[-1.1,-1.1] ):
+        self.xmax = np.array(xmax)
+        self.xmin = np.array(xmin)
+    def __call__(self, **kwargs):
+        x = kwargs["x_new"]
+        tmax = bool(np.all(x <= self.xmax))
+        tmin = bool(np.all(x >= self.xmin))
+        return tmax and tmin
+    
+class zbinner(binner_base):
+    def __init__(self,nbins, range, drop_last_bin=True, 
+                 fix_upper=True, fix_lower=False, use_kde_density = True):
+        self.nbins = nbins
+        self.range = range
+        self.drop_last_bin = drop_last_bin
+        self.X = None
+        self.y = None
+        self.pdf_s = None
+        self.pdf_b = None
+        self.fix_upper = fix_upper
+        self.fix_lower = fix_lower
+        self.breg = 0
+        self.use_kde_density = use_kde_density
+        self.sample_weights = None
+        self.scan = {"bounds": [],"cost": []}
+        
+    def _fom_(self,s,b,breg=10):
+        c = np.zeros(s.shape[0])
+        c[(s == 0) & (b==0)] = 0
+        c[(s+b)!=0] = s[(s+b)!=0] / np.sqrt((s+b+breg)[(s+b)!=0])
+        return c
+    def binned_score(self,x):
+        x = np.sort(x)
+        nb_,_  = np.histogram(self.X[self.y==0],bins=x, range=self.range,
+                              weights=self.sample_weights[self.y==0])
+        ns_,_  = np.histogram(self.X[self.y==1],bins=x, range=self.range,
+                              weights=self.sample_weights[self.y==1])
+        if nb_.shape !=  ns_.shape :    
+            return 0
+        else:
+            return self._fom_(ns_, nb_)
+    def binned_score_density(self,x):
+        x = np.sort(x)
+        ns_  = self.sample_weights[self.y==1].sum()
+        ns_ *= np.array([self.pdf_s.integrate_box_1d(x[i], x[i+1]) for i in range(x.shape[0]-1)])
+        nb_  = self.sample_weights[self.y==0].sum()
+        nb_ *= np.array([self.pdf_b.integrate_box_1d(x[i], x[i+1]) for i in range(x.shape[0]-1)])
+        if nb_.shape !=  ns_.shape :    
+            return 0
+        else:
+            return self._fom_(ns_, nb_)
+    def cost_fun(self,x):
+        z  = None
+        if self.use_kde_density:
+            z  = self.binned_score_density(x)
+        else:
+            z  = self.binned_score(x)
+        self.scan['bounds'].append(np.sort(x))
+        self.scan['cost'  ].append(-np.sqrt((z**2).sum()))
+        return -np.sqrt((z**2).sum())
+
+    def fit(self, X, y, sample_weights=None):
+        self.X = X
+        self.y = y 
+        if sample_weights is not None:
+            self.sample_weights = sample_weights
+        else:
+            self.sample_weights = np.ones(X.shape[0])
+        
+        x_init = np.linspace (self.range[0],self.range[1],self.nbins+1)
+        np.random.seed(555)
+        min_args = {"method": "BFGS"}
+        self.pdf_s = kde.gaussian_kde(self.X[self.y==1], weights=self.sample_weights[self.y==1])
+        self.pdf_b = kde.gaussian_kde(self.X[self.y==0], weights=self.sample_weights[self.y==0])
+        
+        #bound_max   = np.array([ max(self.range) for i in range(self.nbins + 1)])
+        #bound_min   = np.array([ min(self.range) for i in range(self.nbins + 1)])
+        _bounds_   = np.array([self.range for i in range(self.nbins + 1)])
+
+        
+        res = None
+        def print_fun(x, f, accepted):
+            print("at minimum %.4f accepted %d" % (f, int(accepted)))
+        if self.use_kde_density:
+            res = optimize.minimize(self.cost_fun,x_init, bounds=_bounds_,
+                                    method='Nelder-Mead')
+        else:
+            _bounds_ = costum_bounds(bound_max, bound_min)
+            res = optimize.basinhopping(self.cost_fun, x_init, 
+                                        minimizer_kwargs=min_args,
+                                        accept_test=_bounds_,
+                                        #callback=print_fun,
+                                        niter=100)
+            
+        return res
